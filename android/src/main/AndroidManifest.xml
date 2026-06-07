@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ota-update-engine-bridge :android library manifest.
+  The library carries no components; reaching @SystemApi UpdateEngine requires the
+  CONSUMING app to be platform-signed / system-UID (see spec §9, build_integration.md).
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" />
