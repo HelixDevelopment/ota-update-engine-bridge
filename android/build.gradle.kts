@@ -44,4 +44,11 @@ repositories {
 dependencies {
     api(project(":core"))
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    testImplementation(kotlin("test"))
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
+    // Only used to obtain an inert android.content.Context stand-in for
+    // AndroidUpdateEngineBridge's constructor in host-JVM unit tests (Context is an
+    // abstract class with dozens of abstract methods; observeStatus() itself never
+    // touches it). No device/emulator/Robolectric involved.
+    testImplementation("org.mockito:mockito-core:5.12.0")
 }

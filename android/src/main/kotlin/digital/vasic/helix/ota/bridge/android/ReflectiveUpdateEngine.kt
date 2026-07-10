@@ -70,10 +70,16 @@ class ReflectiveUpdateEngine(
      * using ByteBuddy-free java.lang.reflect.Proxy is not viable, so we require the
      * platform path to provide a subclass. For the public-SDK compile we route through
      * [makeCallback], which on-device builds a subclass instance.
+     *
+     * Returns whether the platform actually accepted the binding. The real
+     * `android.os.UpdateEngine.bind(UpdateEngineCallback)` returns `boolean` (see the
+     * "verified surface" table above) — it returns `false` (without throwing) when the
+     * binder registration fails, e.g. because `update_engine` could not be reached. A
+     * caller that ignores a `false` result here would wait forever for status /
+     * completion callbacks that will never arrive, since no callback was ever actually
+     * registered.
      */
-    fun bind(callback: Any) {
-        bindMethod.invoke(engine, callback)
-    }
+    fun bind(callback: Any): Boolean = bindMethod.invoke(engine, callback) as Boolean
 
     fun unbind() {
         unbindMethod.invoke(engine)

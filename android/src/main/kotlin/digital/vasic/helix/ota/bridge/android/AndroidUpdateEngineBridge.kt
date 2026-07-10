@@ -53,7 +53,16 @@ class AndroidUpdateEngineBridge(
             }
         }
         val callback = engine.makeCallback(raw)
-        engine.bind(callback)
+        // engine.bind() returns false (never throws) when the platform failed to
+        // register the callback. Ignoring that would leave this cold Flow silently
+        // hung forever — no Progress, no Complete, no error — since update_engine
+        // would never actually be told to deliver events to it (§11.4.1: an
+        // unreported failure is as misleading as a false PASS). Fail the flow instead
+        // so the caller's collect{}/exception handling sees a real, actionable error.
+        if (!engine.bind(callback)) {
+            close(IllegalStateException("UpdateEngine.bind() returned false: callback was not registered"))
+            return@callbackFlow
+        }
         awaitClose { engine.unbind() }
     }
 
