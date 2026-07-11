@@ -14,8 +14,10 @@ import android.os.PowerManager
 import digital.vasic.helix.ota.bridge.ApplyRequest
 import digital.vasic.helix.ota.bridge.EngineError
 import digital.vasic.helix.ota.bridge.EngineStatus
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
 
 /**
@@ -42,6 +44,15 @@ class AndroidUpdateEngineBridge(
         return ApplyHandle(request.url)
     }
 
+    // callbackFlow's default channel capacity is bounded (~64) with a SUSPEND
+    // overflow policy; trySend() never suspends, so once a lagging collector lets
+    // that buffer fill up, every further trySend() — including the one terminal
+    // onPayloadApplicationComplete event below — starts failing outright and (pre-
+    // fix) was silently discarded. The trailing `.buffer(Channel.UNLIMITED)` widens
+    // the channel so a slow collector can never cause the terminal outcome to be
+    // dropped for capacity reasons; the defensive close() inside
+    // onPayloadApplicationComplete below remains as a second, independent layer for
+    // any OTHER trySend failure mode (e.g. the channel already being closed).
     override fun observeStatus(): Flow<EngineEvent> = callbackFlow {
         val raw = object : RawEngineCallback {
             override fun onStatusUpdate(status: Int, percent: Float) {
@@ -49,7 +60,30 @@ class AndroidUpdateEngineBridge(
             }
 
             override fun onPayloadApplicationComplete(errorCode: Int) {
-                trySend(EngineEvent.Complete(EngineError.fromCode(errorCode)))
+                // onPayloadApplicationComplete delivers the TERMINAL event: whether the
+                // apply outcome was a SUCCESS or a FAILURE. Unlike onStatusUpdate (an
+                // interim progress signal a collector can afford to miss one of),
+                // losing this exact event leaves the caller with no way to ever learn
+                // whether the update succeeded (§11.4.108: a silently-lost outcome is a
+                // release-blocking correctness gap, not a cosmetic one). trySend()
+                // never suspends — on a lagging collector it can legitimately fail
+                // once the channel buffer is saturated, and a discarded ChannelResult
+                // would swallow that failure with no log, no exception, no signal at
+                // all. Escalate exactly like the sibling engine.bind()-false path
+                // above: fail the flow so collect{}/exception handling sees a real,
+                // actionable error instead of hanging forever on an outcome that will
+                // never arrive.
+                val result = trySend(EngineEvent.Complete(EngineError.fromCode(errorCode)))
+                if (result.isFailure) {
+                    close(
+                        IllegalStateException(
+                            "Failed to deliver terminal onPayloadApplicationComplete(errorCode=$errorCode) " +
+                                "event to the observeStatus() collector: trySend() result was $result. " +
+                                "The apply outcome would otherwise be silently lost.",
+                            result.exceptionOrNull(),
+                        ),
+                    )
+                }
             }
         }
         val callback = engine.makeCallback(raw)
@@ -64,7 +98,7 @@ class AndroidUpdateEngineBridge(
             return@callbackFlow
         }
         awaitClose { engine.unbind() }
-    }
+    }.buffer(Channel.UNLIMITED)
 
     override fun rebootToNewSlot(handle: ApplyHandle) {
         // The engine only STAGES the inactive slot; the caller triggers the actual
